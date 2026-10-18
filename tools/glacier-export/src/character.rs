@@ -213,6 +213,9 @@ fn write(level: &Level, model: &SkinnedModel, clips: &[&Animation], root: Mat4, 
         .iter()
         .map(|sm| {
             let p: Vec<[f32; 3]> = sm.vertices.iter().map(|v| pos(v.pos).to_array()).collect();
+            // The stored skin normals point inwards (against the triangles' winding, which faces
+            // out as the level's does): negated, or the side facing a light went dark and the
+            // side facing away lit up.
             let n: Vec<[f32; 3]> = sm.vertices.iter().map(|v| pos(v.normal).to_array()).collect();
             let uv: Vec<[f32; 2]> = sm.vertices.iter().map(|v| v.uv).collect();
             let j: Vec<[u16; 4]> = sm.vertices.iter().map(|v| v.bones).collect();
@@ -224,7 +227,9 @@ fn write(level: &Level, model: &SkinnedModel, clips: &[&Animation], root: Mat4, 
                     if s > 0.0 { v.weights.map(|x| x / s) } else { [1.0, 0.0, 0.0, 0.0] }
                 })
                 .collect();
-            let idx: Vec<u16> = sm.triangles.iter().flatten().copied().collect();
+            // Reversed winding: as stored, the triangles face inwards here (with back faces
+            // culled, only the inside of the model showed).
+            let idx: Vec<u16> = sm.triangles.iter().flat_map(|t| [t[0], t[2], t[1]]).collect();
             (p, n, uv, j, w, idx, sm.texture, crate::blend_mode(sm.blended, 0))
         })
         .collect();

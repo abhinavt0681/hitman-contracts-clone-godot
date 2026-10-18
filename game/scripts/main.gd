@@ -10,6 +10,11 @@ const LEVEL := "res://imported/level/C02-1.glb"
 const MARKERS := "res://imported/level/C02-1_markers.json"
 ## Deep night teal: the sky behind the storm.
 const NIGHT := Color(0.035, 0.065, 0.08)
+## Lighting quality: "ultra" (default) turns on everything Godot's Forward+ renderer offers
+## for this scene; `HITMAN_LIGHTS=standard` is the previous, cheaper setup, for comparison.
+var ultra := OS.get_environment("HITMAN_LIGHTS") != "standard"
+## Debug: `HITMAN_ULTRA_OFF=sdfgi,ssil,ssao,shadows` drops parts of the ultra setup (profiling).
+var ultra_off := OS.get_environment("HITMAN_ULTRA_OFF").split(",", false)
 ## The blizzard's haze, what the distance dissolves into: the original's, measured from
 ## gameplay footage (≈ 0.16, 0.26, 0.29 sRGB at the horizon), a shade darker for our night.
 const HAZE := Color(0.13, 0.21, 0.24)
@@ -87,6 +92,24 @@ func _environment() -> void:
 	env.glow_enabled = true
 	env.glow_intensity = 0.6
 	env.glow_bloom = 0.05
+	if ultra:
+		# Real-time global illumination: lamp light bounces off snow, walls and floors (signed
+		# distance field GI, which follows moving lights and doors; no bake step).
+		env.sdfgi_enabled = not ultra_off.has("sdfgi")
+		env.sdfgi_use_occlusion = true
+		env.sdfgi_cascades = 4
+		env.sdfgi_min_cell_size = 0.15
+		env.sdfgi_bounce_feedback = 0.5
+		env.sdfgi_energy = 1.0
+		# Screen-space indirect light and ambient occlusion: contact darkening in corners and
+		# under objects, colour bleeding at short range.
+		env.ssao_enabled = not ultra_off.has("ssao")
+		env.ssao_radius = 1.2
+		env.ssao_intensity = 2.0
+		env.ssil_enabled = not ultra_off.has("ssil")
+		env.ssil_radius = 4.0
+		# The fog takes in the bounced light too.
+		env.volumetric_fog_gi_inject = 1.0
 	environment = env
 	var we := WorldEnvironment.new()
 	we.environment = env
@@ -165,6 +188,18 @@ func _moon() -> void:
 ## Colours: incandescent tunnel lamps, turquoise neons (by name), sodium outdoors, pale-green
 ## fluorescent under roofs. Assumption: cone angles and ranges are set by eye.
 func _lamps() -> void:
+	# Debug: `HITMAN_TEST_LIGHT="x,y,z"` adds one bright white lamp there; `HITMAN_NO_LAMPS`
+	# leaves the level's own out (lighting checks in isolation).
+	var test := OS.get_environment("HITMAN_TEST_LIGHT").split(",")
+	if test.size() == 3:
+		var t := OmniLight3D.new()
+		t.position = Vector3(test[0].to_float(), test[1].to_float(), test[2].to_float())
+		t.light_energy = 6.0
+		t.omni_range = 8.0
+		t.shadow_enabled = OS.get_environment("HITMAN_TEST_LIGHT_NOSHADOW").is_empty()
+		add_child(t)
+	if not OS.get_environment("HITMAN_NO_LAMPS").is_empty():
+		return
 	var space := get_world_3d().direct_space_state
 	var spots := {}
 	for m: Dictionary in markers:
@@ -200,7 +235,8 @@ func _lamps() -> void:
 			spot.spot_attenuation = 1.2
 			spot.light_energy = 6.0 if flood else 4.0
 			spot.shadow_enabled = true
-			spot.light_size = 0.15
+			# A physical lamp size: shadows soften with distance from what casts them.
+			spot.light_size = 0.25 if ultra else 0.15
 			spot.shadow_bias = 0.04
 			spot.light_volumetric_fog_energy = 0.3
 			lamp = spot
@@ -210,6 +246,12 @@ func _lamps() -> void:
 			var paired := spots.has(Vector3i(p.round()))
 			omni.omni_range = 5.0 if paired else (8.0 if inside else 12.0)
 			omni.omni_attenuation = 1.6
+			# Every light casts soft shadows, fill lights included (cube-map shadows).
+			# (Not one inside its own fixture, a lantern's glass or a lamp's shade: its shadow
+			# would black out its own light.)
+			omni.shadow_enabled = ultra and not ultra_off.has("shadows") and not _enclosed(space, p)
+			omni.light_size = 0.2
+			omni.shadow_bias = 0.05
 			omni.light_energy = 0.35 if paired else (1.0 if inside else 2.0)
 			omni.light_volumetric_fog_energy = 0.15 if paired else 0.5
 			lamp = omni
@@ -217,12 +259,21 @@ func _lamps() -> void:
 		lamp.position = p
 		lamp.light_color = colour
 		lamp.distance_fade_enabled = true
-		lamp.distance_fade_begin = 45.0
-		lamp.distance_fade_shadow = 25.0
+		lamp.distance_fade_begin = 60.0 if ultra else 45.0
+		lamp.distance_fade_shadow = 40.0 if ultra else 25.0
 		lamp.distance_fade_length = 10.0
 		lamp.add_to_group("lamps")
 		add_child(lamp)
 	print("lamps: %d spots, %d omnis" % [counts["spot"], counts["omni"]])
+
+
+## Whether a light sits inside a fixture: solid within 0.6 m in most directions around it.
+func _enclosed(space: PhysicsDirectSpaceState3D, p: Vector3) -> bool:
+	var hits := 0
+	for d: Vector3 in [Vector3.UP, Vector3.DOWN, Vector3.LEFT, Vector3.RIGHT, Vector3.FORWARD, Vector3.BACK]:
+		if not space.intersect_ray(PhysicsRayQueryParameters3D.create(p, p + d * 0.6, 1)).is_empty():
+			hits += 1
+	return hits >= 2
 
 
 ## 47 at his template's spot (the first `Hitman2` placed in the level), or `HITMAN_START`.

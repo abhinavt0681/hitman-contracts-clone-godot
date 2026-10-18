@@ -99,6 +99,12 @@ func _ready() -> void:
 	model = (load(MODEL) as PackedScene).instantiate()
 	add_child(model)
 	anim = model.find_child("AnimationPlayer", true, false) as AnimationPlayer
+	if not OS.get_environment("HITMAN_CULL_TEST").is_empty():
+		for mi in model.find_children("*", "MeshInstance3D", true, false):
+			for s in (mi as MeshInstance3D).mesh.get_surface_count():
+				var m := ((mi as MeshInstance3D).mesh.surface_get_material(s) as BaseMaterial3D).duplicate() as BaseMaterial3D
+				m.cull_mode = BaseMaterial3D.CULL_BACK
+				(mi as MeshInstance3D).set_surface_override_material(s, m)
 	clips = JSON.parse_string(FileAccess.get_file_as_string(CLIPS))
 	for name in ["Stand_Do_Nothing", "Walk_Forward", "Run", "Sneak_Forward", "Sneak_Ambient"]:
 		var a := anim.get_animation(name)
