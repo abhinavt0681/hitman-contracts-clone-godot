@@ -45,8 +45,10 @@ var aim_clip: Animation
 ## Test hook: `HITMAN_SHOOT="2,2.5,3"` draws, aims at the nearest living guard and fires at
 ## those times (seconds).
 var shots: Array[float] = []
-## Tuning: `HITMAN_AIM_HOLD=1` keeps the gun drawn and aimed (for adjusting the grip live).
-var aim_hold := OS.get_environment("HITMAN_AIM_HOLD") != ""
+## Tuning the grip live: `HITMAN_AIM_HOLD=1` keeps the gun drawn and aimed, `=hold` drawn and
+## lowered (as he stands with it).
+var aim_hold := OS.get_environment("HITMAN_AIM_HOLD") not in ["", "hold"]
+var hold_only := OS.get_environment("HITMAN_AIM_HOLD") == "hold"
 var clock := 0.0
 
 
@@ -61,9 +63,8 @@ func _ready() -> void:
 	gun = (load("res://imported/characters/weapon_silverballer.glb") as PackedScene).instantiate()
 	gun.name = "Silverballer"
 	hand.add_child(gun)
-	# Turned over about the barrel and set 2 cm along it (tuned live in the editor): as
-	# exported the grip pointed up out of the hand.
-	gun.transform = Transform3D(Basis(Vector3.BACK, PI), Vector3(0.0, 0.0, -2.0))
+	# A 2° turn about the barrel, tuned live in the editor.
+	gun.transform = Transform3D(Basis(Vector3.BACK, deg_to_rad(-2.0)), Vector3.ZERO)
 	gun.visible = false
 	hold = AimPose.new()
 	skel.add_child(hold)
@@ -111,7 +112,7 @@ func _process(dt: float) -> void:
 	flash.light_energy = maxf(flash.light_energy - dt * 60.0, 0.0)
 	if player.held or player.health <= 0.0:
 		drawn = false
-	if aim_hold:
+	if aim_hold or hold_only:
 		drawn = true
 	aiming = drawn and (Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT) or aim_hold) and reloading <= 0.0
 	clock += dt
