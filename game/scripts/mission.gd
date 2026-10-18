@@ -44,6 +44,7 @@ func _ready() -> void:
 		guards = actors.guards
 		for g: Guard in guards:
 			g.spotted.connect(_spotted)
+	player.died.connect(func() -> void: _end(false))
 	print("mission: %d bomb points, exit at %s" % [bombs.size(), exit_at])
 
 
@@ -98,6 +99,7 @@ func _physics_process(dt: float) -> void:
 	for g: Guard in guards:
 		worst = maxf(worst, g.suspicion)
 	meter.value = worst
+	weapons_hud()
 	meter.visible = worst > 0.01
 	# Planting: E within reach of an unplanted bomb point, then hold still for a moment.
 	if planting >= 0:
@@ -120,10 +122,31 @@ func _physics_process(dt: float) -> void:
 		_end(true)
 
 
+## Spotted: the base is on alert (guards fight; the mission fails only if 47 dies).
+## Health and rounds, bottom left.
+var status: Label
+
+
+func weapons_hud() -> void:
+	if status == null:
+		status = Label.new()
+		status.add_theme_font_override("font", load("res://fonts/Michroma-Regular.ttf"))
+		status.add_theme_font_size_override("font_size", 15)
+		status.add_theme_color_override("font_color", Color(0.85, 0.9, 0.92, 0.85))
+		status.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.8))
+		status.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_LEFT)
+		status.offset_top = -70
+		status.offset_left = 28
+		objectives.get_parent().add_child(status)
+	var w := get_parent().find_child("Weapons", false, false) as Weapons
+	var gun := ""
+	if w:
+		gun = "   SILVERBALLER  %d / %d%s" % [w.in_clip, w.spare, "   (Q to draw)" if not w.drawn else ""]
+	status.text = "HEALTH  %d%s" % [int(player.health), gun]
+
+
 func _spotted(g: Guard) -> void:
-	if not over:
-		print("spotted by %s at %.1f m" % [g.body.name, g.body.global_position.distance_to(player.global_position)])
-		_end(false)
+	print("spotted by %s at %.1f m" % [g.body.name, g.body.global_position.distance_to(player.global_position)])
 
 
 func _end(won: bool) -> void:
@@ -136,4 +159,4 @@ func _end(won: bool) -> void:
 		banner.text = "MISSION ACCOMPLISHED\n%d:%02d\n\nR to play again" % [int(clock) / 60, int(clock) % 60]
 	else:
 		banner.add_theme_color_override("font_color", Color(0.95, 0.35, 0.3))
-		banner.text = "YOU HAVE BEEN SPOTTED\nMISSION FAILED\n\nR to try again"
+		banner.text = "47 IS DEAD\nMISSION FAILED\n\nR to try again"

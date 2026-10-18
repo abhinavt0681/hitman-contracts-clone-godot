@@ -59,6 +59,7 @@ pub fn export(level: &Level, _world: &crate::World, out: &Path) -> Result<()> {
     let root = crate::instance_transform(template.rotation, [0.0; 3]) * Mat4::from_rotation_y(std::f32::consts::PI) * F;
     write(level, &model, &clips, root, "Hitman", &out.join("hitman.glb"))?;
     tie(level, out)?;
+    weapons(level, _world, out)?;
     actors(level, out)?;
     Ok(())
 }
@@ -117,6 +118,55 @@ fn tie(level: &Level, out: &Path) -> Result<()> {
     });
     std::fs::write(out.join("tie.json"), serde_json::to_vec_pretty(&meta)?)?;
     println!("tie: {}", meta);
+    Ok(())
+}
+
+/// Weapon templates drawn in 47's hand (the Bevy project's `weapons::model_for`).
+const HELD_WEAPONS: [(&str, &str); 2] = [("Gun_Hardballer_Silenced_01", "silverballer"), ("Rifle_AK47_01", "ak47")];
+
+/// The guns 47 holds (`weapon_<name>.glb`), every part of the template baked into his right
+/// hand bone's frame (centimetres, like his bones): placed so the template's `PosBox_Hand`
+/// sits in the palm, as the Bevy project's `weapons::hold_models` (`SWAP_XZ · grip⁻¹`, there
+/// in Bevy's bone space; here brought into ours by the folded-in mirror `F`).
+fn weapons(level: &Level, world: &crate::World, out: &Path) -> Result<()> {
+    let swap = Mat4::from_cols(glam::Vec4::Z, glam::Vec4::Y, glam::Vec4::X, glam::Vec4::W);
+    for (template, file) in HELD_WEAPONS {
+        let Some(t) = level.entities.iter().position(|e| e.name == template) else {
+            println!("weapon {template}: not in the level");
+            continue;
+        };
+        let to_template = world.transform(t).inverse();
+        let relative = |i: usize| to_template * world.transform(i);
+        let children: Vec<usize> = (0..level.entities.len()).filter(|&i| world.parents[i] == Some(t)).collect();
+        let grip = children.iter().find(|&&i| level.entities[i].name == "PosBox_Hand").map(|&i| relative(i)).unwrap_or(Mat4::IDENTITY);
+        let hold = F * swap * grip.inverse();
+        let mut gltf = Gltf::default();
+        let mut materials = Materials::new();
+        let mut prims_data = Vec::new();
+        for &i in &children {
+            let e = &level.entities[i];
+            if e.name.starts_with("PosBox") || e.primitive == 0 {
+                continue;
+            }
+            let Ok(model) = level.prm.model(e.primitive) else { continue };
+            let m = hold * relative(i);
+            let flip = m.determinant() < 0.0;
+            for sm in model.submeshes.iter().filter(|sm| sm.in_lod0() && !sm.is_proxy()) {
+                let p: Vec<[f32; 3]> = sm.vertices.iter().map(|v| m.transform_point3(Vec3::from(crate::swap_xz(v.pos))).to_array()).collect();
+                let n: Vec<[f32; 3]> = sm.vertices.iter().map(|v| m.transform_vector3(Vec3::from(crate::swap_xz(v.normal))).normalize_or_zero().to_array()).collect();
+                let uv: Vec<[f32; 2]> = sm.vertices.iter().map(|v| v.uv).collect();
+                let idx: Vec<u16> = sm.triangles.iter().flat_map(|t| if flip { [t[0], t[2], t[1]] } else { *t }).collect();
+                let mat = materials.get(&mut gltf, level, sm.texture, crate::blend_mode(sm.blended, sm.render_state));
+                prims_data.push((p, n, uv, idx, mat));
+            }
+        }
+        let prims: Vec<Primitive> = prims_data.iter().map(|(p, n, uv, idx, mat)| Primitive { positions: p, normals: n, uvs: uv, colors: None, joints: None, weights: None, indices: idx, material: Some(*mat) }).collect();
+        let mesh = gltf.mesh(file, &prims);
+        let node = gltf.node(json!({ "name": file, "mesh": mesh }));
+        gltf.scene_roots = vec![node];
+        gltf.write(&out.join(format!("weapon_{file}.glb")))?;
+        println!("weapon {template}: {} parts -> weapon_{file}.glb", prims.len());
+    }
     Ok(())
 }
 
@@ -293,7 +343,10 @@ fn write(level: &Level, model: &SkinnedModel, clips: &[&Animation], root: Mat4, 
                 let (a, b) = (pos(anm::sample_pos(&t.positions, 0.0)), pos(anm::sample_pos(&t.positions, c.frames as f32)));
                 (b - a).with_y(0.0).length() * 0.01 / secs
             });
-            (c.name.clone(), json!({ "seconds": secs, "root_speed": speed }))
+            // Upper-body clips animate only some bones; Godot's import fills in the rest at rest,
+            // so say which are really animated (`aim_pose.gd` applies only those).
+            let bones: Vec<&str> = if c.name.starts_with("UB_") { c.tracks.iter().map(|t| t.bone.as_str()).collect() } else { Vec::new() };
+            (c.name.clone(), json!({ "seconds": secs, "root_speed": speed, "bones": bones }))
         })
         .collect();
     std::fs::write(path.with_extension("json"), serde_json::to_vec_pretty(&meta)?)?;

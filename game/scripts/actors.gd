@@ -44,7 +44,12 @@ func _ready() -> void:
 			if not walk.is_empty():
 				player.get_animation(walk).loop_mode = Animation.LOOP_LINEAR
 			var guard := Guard.new()
-			guard.setup(body, player, a.get("route", []), {"walk": walk, "idle": idle, "alert": _clip(own, regular, "Point_Direction_Tense")})
+			var run := _clip(own, regular, "Run")
+			if not run.is_empty():
+				player.get_animation(run).loop_mode = Animation.LOOP_LINEAR
+			var die := _clip(own, regular, ["Die_Backward", "Die_Forward"][randi() % 2])
+			guard.name = "Guard"
+			guard.setup(body, player, a.get("route", []), {"walk": walk, "idle": idle, "run": run, "die": die, "alert": _clip(own, regular, "Point_Direction_Tense")})
 			body.add_child(guard)
 			guards.append(guard)
 		# Something solid to bump into.

@@ -71,6 +71,10 @@ var step_variant := 0
 var step_lag := 0.0
 ## Something else (a ladder) moves and animates him: no walking, no gravity.
 var held := false
+## Hitpoints (the Bevy project's 100), and whether he's aiming (he then faces the camera).
+var health := 100.0
+var aiming := false
+signal died
 ## What E would do here, shown at the bottom of the screen; set each frame by whoever offers it.
 var prompt := ""
 var prompt_label: Label
@@ -232,6 +236,24 @@ func climb_input() -> float:
 	return v
 
 
+## A hit: hitpoints off; at 0 he dies (`Die_Sequence`).
+func hurt(amount: float) -> void:
+	if health <= 0.0:
+		return
+	health -= amount
+	var pain := AudioStreamPlayer3D.new()
+	pain.stream = load("res://imported/sounds/Impact_Flesh_0%d.wav" % (randi() % 5 + 1))
+	pain.autoplay = true
+	pain.finished.connect(pain.queue_free)
+	add_child(pain)
+	if health <= 0.0:
+		health = 0.0
+		held = true
+		anim.speed_scale = 1.0
+		anim.play("Die_Sequence", 0.15)
+		died.emit()
+
+
 func make_current() -> void:
 	camera.current = true
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
@@ -293,7 +315,9 @@ func _physics_process(dt: float) -> void:
 
 	if OS.get_environment("HITMAN_TRACE") != "" and int(clock * 60.0) % 60 == 0:
 		print("trace t=%.1f pos=%s vel=%s floor=%s wish=%s" % [clock, position, velocity, is_on_floor(), wish])
-	if wish != Vector3.ZERO:
+	if aiming:
+		model.rotation.y = lerp_angle(model.rotation.y, yaw, minf(TURN_RATE * 1.5 * dt, 1.0))
+	elif wish != Vector3.ZERO:
 		var target := atan2(-wish.x, -wish.z)
 		model.rotation.y = lerp_angle(model.rotation.y, target, minf(TURN_RATE * dt, 1.0))
 	var moving := Vector2(velocity.x, velocity.z).length() if wish != Vector3.ZERO else 0.0
