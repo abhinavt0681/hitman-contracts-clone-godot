@@ -156,7 +156,16 @@ fn actors(level: &Level, out: &Path) -> Result<()> {
         let (_, q, _) = m.to_scale_rotation_translation();
         let set = sets.iter().find(|(k, _)| actor.name.contains(k)).map_or("Reg_Male.anm", |(_, s)| *s);
         let script = actor.props.as_ref().map(|p| p.script.clone()).unwrap_or_default();
-        list.push(json!({ "name": actor.name, "model": file, "pos": crate::glacier_to_bevy(actor.position).to_array(), "rot": q.to_array(), "set": set, "script": script }));
+        // Patrol route from its `WayPoints` path: node positions, pausing at `…Wait…` nodes
+        // (the Bevy project's `patrol_route`).
+        let route: Vec<serde_json::Value> = actor
+            .props
+            .as_ref()
+            .and_then(|p| p.waypoints)
+            .and_then(|i| level.entities.get(i))
+            .map(|path| path.path.iter().filter_map(|&n| level.entities.get(n)).map(|n| json!({ "pos": crate::glacier_to_bevy(n.position).to_array(), "wait": if n.name.contains("Wait") { 4.0 } else { 0.0 } })).collect())
+            .unwrap_or_default();
+        list.push(json!({ "name": actor.name, "model": file, "pos": crate::glacier_to_bevy(actor.position).to_array(), "rot": q.to_array(), "set": set, "script": script, "route": route }));
     }
     std::fs::write(out.join("actors.json"), serde_json::to_vec_pretty(&list)?)?;
     println!("actors: {} characters, {} models", list.len(), written.len());

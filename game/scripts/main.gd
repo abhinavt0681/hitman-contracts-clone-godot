@@ -44,16 +44,20 @@ func _ready() -> void:
 	add_child(level)
 	_additive(level)
 	markers = JSON.parse_string(FileAccess.get_file_as_string(MARKERS))
-	add_child(Actors.new())
+	var actors := Actors.new()
+	actors.name = "Actors"
+	add_child(actors)
 	var sound := Soundscape.new()
 	add_child(sound)
 	_spawn_player()
 	add_child(Doors.new())
 	add_child(Ladders.new())
 	add_child(Steam.new())
+	add_child(Mission.new())
 	_camera()
 	if OS.get_environment("HITMAN_NO_SNOW").is_empty():
 		var blizzard := Blizzard.new()
+		blizzard.name = "Blizzard"
 		blizzard.environment = environment
 		blizzard.soundscape = sound
 		add_child(blizzard)

@@ -8,7 +8,11 @@ extends Node3D
 const DIR := "res://imported/characters/"
 const IDLES := ["Stand_Freezing", "Stand_Relaxed", "Stand_Do_Nothing", "Stand_Tense", "Stand"]
 
+## Scripts of the armed characters, who become `Guard`s.
+const ARMED := ["Soldier", "Guard", "Bodyguard", "Agent", "Sniper"]
+
 var libraries: Dictionary = {}
+var guards: Array[Guard] = []
 
 
 func _ready() -> void:
@@ -34,6 +38,15 @@ func _ready() -> void:
 			player.get_animation(idle).loop_mode = Animation.LOOP_LINEAR
 			player.play(idle)
 			player.seek(randf() * player.current_animation_length)
+		var script: String = a.get("script", "")
+		if ARMED.any(func(k: String) -> bool: return script.contains(k)):
+			var walk := _clip(own, regular, "Walk")
+			if not walk.is_empty():
+				player.get_animation(walk).loop_mode = Animation.LOOP_LINEAR
+			var guard := Guard.new()
+			guard.setup(body, player, a.get("route", []), {"walk": walk, "idle": idle, "alert": _clip(own, regular, "Point_Direction_Tense")})
+			body.add_child(guard)
+			guards.append(guard)
 		# Something solid to bump into.
 		var solid := StaticBody3D.new()
 		var shape := CollisionShape3D.new()
@@ -45,7 +58,16 @@ func _ready() -> void:
 		solid.add_child(shape)
 		body.add_child(solid)
 		add_child(body)
-	print("actors: %d" % list.size())
+	print("actors: %d (%d guards, %d patrolling)" % [list.size(), guards.size(), guards.filter(func(g: Guard) -> bool: return g.route.size() > 1).size()])
+
+
+## A clip by name from the character's own set, else the regular set ("" if neither has it).
+func _clip(own: AnimationLibrary, regular: AnimationLibrary, name: String) -> String:
+	if own.has_animation(name):
+		return name
+	if own != regular and regular.has_animation(name):
+		return "reg/" + name
+	return ""
 
 
 ## A set's clips, loaded once and shared by everyone who uses it.
