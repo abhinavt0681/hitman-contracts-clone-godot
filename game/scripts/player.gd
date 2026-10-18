@@ -158,7 +158,9 @@ func _ready() -> void:
 	camera = Camera3D.new()
 	camera.fov = 45.0
 	camera.far = 2000.0
-	camera.position.x = CAMERA_SHOULDER
+	# Over the shoulder: the arm itself sits off to the side (a spring arm places its child,
+	# so offsetting the camera fought it and the view jittered).
+	arm.position.x = CAMERA_SHOULDER
 	arm.add_child(camera)
 
 

@@ -58,6 +58,8 @@ func _ready() -> void:
 	add_child(weapons)
 	add_child(CloseCombat.new())
 	add_child(Mission.new())
+	if OS.get_environment("HITMAN_CAMLOG") != "":
+		add_child(load("res://scripts/cam_log.gd").new())
 	_camera()
 	if OS.get_environment("HITMAN_NO_SNOW").is_empty():
 		var blizzard := Blizzard.new()

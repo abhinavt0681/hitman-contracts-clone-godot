@@ -150,7 +150,7 @@ func _process(dt: float) -> void:
 	player.camera.fov = lerpf(player.camera.fov, AIM_FOV if aiming else 45.0, minf(dt * 10.0, 1.0))
 	player.arm.spring_length = lerpf(player.arm.spring_length, AIM_DISTANCE if aiming else Player.CAMERA_DISTANCE, minf(dt * 10.0, 1.0))
 	crosshair.visible = aiming
-	player.camera.position.x = lerpf(player.camera.position.x, 0.75 if aiming else Player.CAMERA_SHOULDER, minf(dt * 10.0, 1.0))
+	player.arm.position.x = lerpf(player.arm.position.x, 0.75 if aiming else Player.CAMERA_SHOULDER, minf(dt * 10.0, 1.0))
 
 
 func _fire() -> void:
