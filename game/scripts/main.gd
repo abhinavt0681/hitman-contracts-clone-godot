@@ -56,6 +56,7 @@ func _ready() -> void:
 	var weapons := Weapons.new()
 	weapons.name = "Weapons"
 	add_child(weapons)
+	add_child(CloseCombat.new())
 	add_child(Mission.new())
 	_camera()
 	if OS.get_environment("HITMAN_NO_SNOW").is_empty():

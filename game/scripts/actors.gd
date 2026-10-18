@@ -17,7 +17,11 @@ var guards: Array[Guard] = []
 
 func _ready() -> void:
 	var list: Array = JSON.parse_string(FileAccess.get_file_as_string(DIR + "actors.json"))
+	# Test hook: `HITMAN_ONLY_GUARD=name` leaves out every other armed character.
+	var only := OS.get_environment("HITMAN_ONLY_GUARD")
 	for a: Dictionary in list:
+		if only != "" and a["name"] != only and ARMED.any(func(k: String) -> bool: return String(a.get("script", "")).contains(k)):
+			continue
 		var body := Node3D.new()
 		body.name = a["name"]
 		var q: Array = a["rot"]

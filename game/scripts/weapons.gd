@@ -145,6 +145,7 @@ func _process(dt: float) -> void:
 	hold.influence = move_toward(hold.influence, 1.0 if drawn and reloading <= 0.0 else 0.0, dt * 6.0)
 	hold.pitch = -player.pitch * 0.8 if aiming else 0.0
 	player.aiming = aiming
+	player.gun_drawn = drawn
 	gun.rotation.z = lerp_angle(gun.rotation.z, deg_to_rad(GRIP_AIMED if aiming else GRIP_LOWERED), minf(dt * 12.0, 1.0))
 	player.camera.fov = lerpf(player.camera.fov, AIM_FOV if aiming else 45.0, minf(dt * 10.0, 1.0))
 	player.arm.spring_length = lerpf(player.arm.spring_length, AIM_DISTANCE if aiming else Player.CAMERA_DISTANCE, minf(dt * 10.0, 1.0))

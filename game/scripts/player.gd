@@ -74,6 +74,11 @@ var held := false
 ## Hitpoints (the Bevy project's 100), and whether he's aiming (he then faces the camera).
 var health := 100.0
 var aiming := false
+var gun_drawn := false
+## "suit", or "soldier" in a guard's uniform.
+var outfit := "suit"
+## Dragging a body: slow, and the drag clips.
+var dragging := false
 signal died
 ## What E would do here, shown at the bottom of the screen; set each frame by whoever offers it.
 var prompt := ""
@@ -110,7 +115,7 @@ func _ready() -> void:
 				m.cull_mode = BaseMaterial3D.CULL_BACK
 				(mi as MeshInstance3D).set_surface_override_material(s, m)
 	clips = JSON.parse_string(FileAccess.get_file_as_string(CLIPS))
-	for name in ["Stand_Do_Nothing", "Walk_Forward", "Run", "Sneak_Forward", "Sneak_Ambient"]:
+	for name in ["Stand_Do_Nothing", "Walk_Forward", "Run", "Sneak_Forward", "Sneak_Ambient", "Drag_Backward", "Drag_Ambient"]:
 		var a := anim.get_animation(name)
 		if a:
 			a.loop_mode = Animation.LOOP_LINEAR
@@ -236,6 +241,27 @@ func climb_input() -> float:
 	return v
 
 
+## Puts on the uniform of the character `from` (a guard's body node): his skinned mesh on 47's
+## skeleton (the bones share their names), and the tie comes off with the suit.
+func wear(from: Node3D) -> void:
+	var source: MeshInstance3D = null
+	for mi in from.find_children("*", "MeshInstance3D", true, false):
+		if (mi as MeshInstance3D).skin:
+			source = mi
+			break
+	if source == null:
+		return
+	for mi in model.find_children("*", "MeshInstance3D", true, false):
+		var m := mi as MeshInstance3D
+		if m.skin:
+			m.mesh = source.mesh
+			m.skin = source.skin
+	if tie:
+		tie.visible = false
+	outfit = "soldier"
+	print("47 now wears %s's uniform" % from.name)
+
+
 ## A hit: hitpoints off; at 0 he dies (`Die_Sequence`).
 func hurt(amount: float) -> void:
 	if health <= 0.0:
@@ -303,6 +329,9 @@ func _physics_process(dt: float) -> void:
 	var right := Vector3(-forward.z, 0.0, forward.x)
 	var wish := (forward * input.y + right * input.x).normalized()
 	var speed := SNEAK_SPEED if sneaking else (RUN_SPEED if running else WALK_SPEED)
+	if dragging:
+		speed = 1.0
+		running = false
 
 	velocity.x = wish.x * speed
 	velocity.z = wish.z * speed
@@ -315,6 +344,16 @@ func _physics_process(dt: float) -> void:
 
 	if OS.get_environment("HITMAN_TRACE") != "" and int(clock * 60.0) % 60 == 0:
 		print("trace t=%.1f pos=%s vel=%s floor=%s wish=%s" % [clock, position, velocity, is_on_floor(), wish])
+	if dragging:
+		dragging = false
+		var back := Vector2(velocity.x, velocity.z).length() > 0.2
+		if anim.current_animation != ("Drag_Backward" if back else "Drag_Ambient"):
+			anim.play("Drag_Backward" if back else "Drag_Ambient", 0.2)
+		if wish != Vector3.ZERO:
+			# Facing the body, backing away from it.
+			model.rotation.y = lerp_angle(model.rotation.y, atan2(wish.x, wish.z), minf(TURN_RATE * dt, 1.0))
+		_footsteps(dt, Vector2(velocity.x, velocity.z).length(), false)
+		return
 	if aiming:
 		model.rotation.y = lerp_angle(model.rotation.y, yaw, minf(TURN_RATE * 1.5 * dt, 1.0))
 	elif wish != Vector3.ZERO:

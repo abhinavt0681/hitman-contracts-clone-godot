@@ -6,7 +6,7 @@ extends Node
 ## Numbers are the Bevy project's (`game/ai.rs`, AGENTS.md "Sight"), themselves partly
 ## assumptions until the script VM can confirm them:
 ## - sight 30 m when 47 is lit, 9 m in the dark; outdoors the blizzard caps it at 22 m, 6 m in
-##   a full squall; indoors no cap. Field of view ±60° (assumption), all round within 2 m.
+##   a full squall; indoors no cap. Field of view ±60° (assumption); behind them only hearing counts.
 ## - hearing: running carries 14 m, walking 4 m, sneaking nothing; snow halves it outdoors and
 ##   a squall cuts it by up to 60%.
 ## - suspicion fills faster the closer and better lit 47 is (a few tenths of a second up
@@ -66,6 +66,15 @@ var fire_cd := 0.0
 var aim: AimPose
 var gun_sound: AudioStreamPlayer3D
 var last_seen := Vector3.INF
+var ragdoll: PhysicalBoneSimulator3D
+## Taken by 47 (his uniform) or found by another guard.
+var stripped := false
+var found := false
+## Bodies within this are noticed (the Bevy project's `BODY_SPOT_RANGE`).
+const BODY_SPOT := 18.0
+## In a guard's uniform 47 passes unless he comes this close, runs, or shows a gun; then
+## suspicion builds slowly (Blood Money's scrutiny, filling the original's gap; assumption).
+const SCRUTINY := 2.5
 
 
 func setup(b: Node3D, a: AnimationPlayer, r: Array, clips: Dictionary) -> void:
@@ -95,7 +104,9 @@ func _physics_process(dt: float) -> void:
 	if think <= 0.0:
 		think = 0.1
 		sees = _perceive()
-	var gain := _gain() if sees else 0.0
+	var gain := _disguised_gain() if sees else 0.0
+	if not sees:
+		_look_for_bodies()
 	gain += _hearing()
 	suspicion = clampf(suspicion + gain * dt - (DECAY * dt if gain <= 0.0 else 0.0), 0.0, 1.0)
 	if suspicion >= 1.0:
@@ -119,7 +130,7 @@ func _perceive() -> bool:
 		return false
 	var fwd := _forward()
 	var flat := Vector3(to.x, 0.0, to.z).normalized()
-	if d > 2.0 and fwd.angle_to(flat) > FOV:
+	if fwd.angle_to(flat) > FOV:
 		return false
 	var q := PhysicsRayQueryParameters3D.create(eye, target, 1 | 2, [player.get_rid()])
 	return body.get_world_3d().direct_space_state.intersect_ray(q).is_empty()
@@ -162,6 +173,57 @@ func _gain() -> float:
 	# About a second (the Bevy project's 0.8–1.4 s reaction) right up close and lit, several
 	# at the edge of sight.
 	return 0.2 + 0.7 * near * near + 0.25 * _light()
+
+
+## In disguise: only close scrutiny, running or a drawn gun give him away.
+func _disguised_gain() -> float:
+	if player.outfit == "suit":
+		return _gain()
+	var d := body.global_position.distance_to(player.global_position)
+	var running := Vector2(player.velocity.x, player.velocity.z).length() > 3.0
+	if player.aiming or player.gun_drawn:
+		return _gain()
+	if running:
+		return _gain() * 0.5
+	return 0.25 if d < SCRUTINY else 0.0
+
+
+## A body in view raises the alarm.
+func _look_for_bodies() -> void:
+	if think > 0.05:
+		return
+	for g in get_tree().get_nodes_in_group("guards"):
+		var other := g as Guard
+		if other.alive or other.found or other == self:
+			continue
+		var at := other.body_position()
+		var to := at - (body.global_position + Vector3.UP * EYE)
+		if to.length() > BODY_SPOT:
+			continue
+		if _forward().angle_to(Vector3(to.x, 0.0, to.z).normalized()) > FOV:
+			continue
+		var ray := PhysicalRayQueryParameters(body.global_position + Vector3.UP * EYE, at + Vector3.UP * 0.2)
+		if body.get_world_3d().direct_space_state.intersect_ray(ray).is_empty():
+			other.found = true
+			print("%s found the body of %s" % [body.name, other.body.name])
+			last_seen = at
+			_alarm()
+			return
+
+
+func PhysicalRayQueryParameters(a: Vector3, b: Vector3) -> PhysicsRayQueryParameters3D:
+	var excl: Array[RID] = [player.get_rid()]
+	return PhysicsRayQueryParameters3D.create(a, b, 1 | 2, excl)
+
+
+## Where the body lies: its pelvis (the death clips carry it away from the node's origin).
+func body_position() -> Vector3:
+	var skel := body.find_child("Skeleton3D", true, false) as Skeleton3D
+	if skel:
+		var b := skel.find_bone("PELVIS")
+		if b >= 0:
+			return skel.global_transform * skel.get_bone_global_pose(b).origin
+	return body.global_position
 
 
 ## Suspicion per second from what 47's feet make heard.
@@ -352,15 +414,47 @@ func hurt(amount: float, from: Vector3) -> void:
 		last_seen = from
 		raise_alarm()
 		return
+	var push := (body.global_position - from).normalized() * 40.0
+	push.y = 10.0
+	die(push)
+	print("guard down: %s" % body.name)
+
+
+## Dead: the ragdoll takes over (pushed by the shot, if any).
+func die(push: Vector3 = Vector3.ZERO) -> void:
+	if not alive:
+		return
 	alive = false
 	if aim:
 		aim.influence = 0.0
-	anim.play(die_clip, 0.1)
-	var a := anim.get_animation(die_clip)
-	if a:
-		a.loop_mode = Animation.LOOP_NONE
-	# The dead don't block the way.
+	for c in body.find_children("*", "CollisionShape3D", true, false):
+		if not (c.get_parent() is PhysicalBone3D):
+			(c as CollisionShape3D).set_deferred("disabled", true)
+	go_limp(push)
+	killed.emit(self)
+
+
+## Down for good. (Physics ragdolls (`Ragdoll`) fell through the floor under the skeleton's
+## centimetre scale; until that's solved the original death clips play and the body stays put.)
+func go_limp(_push: Vector3 = Vector3.ZERO) -> void:
+	if anim.current_animation.contains("Die_Carrot"):
+		return
+	var clip := die_clip
+	if clip.is_empty() or not anim.has_animation(clip):
+		return
+	anim.get_animation(clip).loop_mode = Animation.LOOP_NONE
+	anim.play(clip, 0.1)
+
+
+## The fiber wire: no sound, no struggle the others can see from afar; `Die_Carrot`, then limp.
+func strangled(clip_seconds: float) -> void:
+	alive = false
+	if aim:
+		aim.influence = 0.0
 	for c in body.find_children("*", "CollisionShape3D", true, false):
 		(c as CollisionShape3D).set_deferred("disabled", true)
+	var clip := "reg/Die_Carrot" if anim.has_animation("reg/Die_Carrot") else "Die_Carrot"
+	if anim.has_animation(clip):
+		anim.get_animation(clip).loop_mode = Animation.LOOP_NONE
+		anim.play(clip, 0.1)
 	killed.emit(self)
-	print("guard down: %s" % body.name)
