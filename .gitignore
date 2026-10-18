@@ -1,0 +1,5 @@
+/data
+/game/.godot
+/game/imported
+/tools/glacier-export/target
+*.mp4

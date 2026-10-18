@@ -1,0 +1,18 @@
+[package]
+name = "glacier-export"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Converts Hitman: Contracts (Glacier 1) level data into glTF, PNG and WAV for the Godot clone"
+
+[dependencies]
+anyhow = "1.0.104"
+flate2 = "1.1.10"
+texpresso = "2.0.2"
+zip = { version = "9.0.3", default-features = false, features = ["deflate"] }
+serde_json = "1"
+png = "0.17"
+glam = "0.30"
+
+[profile.release]
+debug = false
