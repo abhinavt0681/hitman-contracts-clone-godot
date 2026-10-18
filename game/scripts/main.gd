@@ -10,9 +10,10 @@ const LEVEL := "res://imported/level/C02-1.glb"
 const MARKERS := "res://imported/level/C02-1_markers.json"
 ## Deep night teal: the sky behind the storm.
 const NIGHT := Color(0.035, 0.065, 0.08)
-## Lighting quality: "ultra" (default) turns on everything Godot's Forward+ renderer offers
-## for this scene; `HITMAN_LIGHTS=standard` is the previous, cheaper setup, for comparison.
-var ultra := OS.get_environment("HITMAN_LIGHTS") != "standard"
+## Lighting quality: `HITMAN_LIGHTS=ultra` turns on everything Godot's Forward+ renderer offers
+## for this scene (real-time GI, SSAO/SSIL, shadows on every light: ~16–33 fps on an RX 580
+## class card); the default is the cheaper standard setup.
+var ultra := OS.get_environment("HITMAN_LIGHTS") == "ultra"
 ## Debug: `HITMAN_ULTRA_OFF=sdfgi,ssil,ssao,shadows` drops parts of the ultra setup (profiling).
 var ultra_off := OS.get_environment("HITMAN_ULTRA_OFF").split(",", false)
 ## The blizzard's haze, what the distance dissolves into: the original's, measured from
