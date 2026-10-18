@@ -21,6 +21,9 @@ signal killed(guard: Guard)
 ## rounds at 600 a minute, 18 hitpoints a round at combat range, out to 22 m; between bursts
 ## 1–2 s. Hit chance falls with distance and with 47 moving (assumption: tuned by feel).
 const HITPOINTS := 20.0
+## Guards react to 47 (sight, hearing, bodies, alarms, combat) only with `HITMAN_GUARDS=on`;
+## off for now (the maintainer's call), they just patrol and can be killed.
+static var respond := OS.get_environment("HITMAN_GUARDS") == "on"
 const ALARM_SPREAD := 35.0
 const RIFLE_RANGE := 22.0
 const RUN_SPEED := 4.0
@@ -99,6 +102,10 @@ func _physics_process(dt: float) -> void:
 		return
 	if alarmed:
 		_combat(dt)
+		return
+	if not respond:
+		suspicion = 0.0
+		_patrol(dt)
 		return
 	think -= dt
 	if think <= 0.0:
@@ -301,7 +308,7 @@ func _alarm() -> void:
 
 ## Into combat: after a moment's reaction, aim and fire.
 func raise_alarm() -> void:
-	if alarmed or not alive:
+	if alarmed or not alive or not respond:
 		return
 	alarmed = true
 	suspicion = 1.0
