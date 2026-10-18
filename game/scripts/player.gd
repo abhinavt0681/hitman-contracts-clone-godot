@@ -10,7 +10,8 @@ extends CharacterBody3D
 ## releases it, a click takes it back), WASD, Shift run, Ctrl sneak. F11 toggles fullscreen.
 ##
 ## Test hooks: `HITMAN_YAW=radians` (0 faces −Z); `HITMAN_AUTOWALK=secs[@start]` holds W from
-## `start` seconds for `secs` (`HITMAN_AUTORUN=1` adds Shift).
+## `start` seconds for `secs` (`HITMAN_AUTORUN=1` adds Shift); `HITMAN_KEYS="E@2.5,E@9"` taps E
+## (interact) at those times.
 
 const WALK_SPEED := 1.6
 const RUN_SPEED := 4.2
@@ -60,6 +61,12 @@ var step_player: AudioStreamPlayer3D
 var step_variant := 0
 ## The height of the last steps still to be eased out of the model and camera (m).
 var step_lag := 0.0
+## Something else (a ladder) moves and animates him: no walking, no gravity.
+var held := false
+## What E would do here, shown at the bottom of the screen; set each frame by whoever offers it.
+var prompt := ""
+var prompt_label: Label
+var key_taps: Array[float] = []
 var capsule_radius := 0.3
 
 
@@ -96,6 +103,17 @@ func _ready() -> void:
 	if not walk[0].is_empty():
 		autowalk = Vector2(walk[1].to_float() if walk.size() > 1 else 0.0, walk[0].to_float())
 
+	if not InputMap.has_action("interact"):
+		InputMap.add_action("interact")
+		var e := InputEventKey.new()
+		e.physical_keycode = KEY_E
+		InputMap.action_add_event("interact", e)
+	for tap in OS.get_environment("HITMAN_KEYS").split(",", false):
+		var parts := tap.split("@")
+		if parts.size() == 2 and parts[0].to_upper() == "E":
+			key_taps.append(parts[1].to_float())
+	_prompt_ui()
+
 	pivot = Node3D.new()
 	pivot.position.y = EYE_HEIGHT
 	add_child(pivot)
@@ -111,6 +129,33 @@ func _ready() -> void:
 	camera.far = 2000.0
 	camera.position.x = CAMERA_SHOULDER
 	arm.add_child(camera)
+
+
+func _prompt_ui() -> void:
+	var layer := CanvasLayer.new()
+	add_child(layer)
+	prompt_label = Label.new()
+	prompt_label.add_theme_font_override("font", load("res://fonts/Michroma-Regular.ttf"))
+	prompt_label.add_theme_font_size_override("font_size", 18)
+	prompt_label.add_theme_color_override("font_color", Color(0.85, 0.9, 0.92, 0.9))
+	prompt_label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.8))
+	prompt_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	prompt_label.set_anchors_and_offsets_preset(Control.PRESET_CENTER_BOTTOM)
+	prompt_label.offset_top = -90.0
+	prompt_label.offset_bottom = -60.0
+	prompt_label.offset_left = -400.0
+	prompt_label.offset_right = 400.0
+	layer.add_child(prompt_label)
+
+
+## Whether E was tapped this frame (keyboard, or a scripted `HITMAN_KEYS` tap).
+func interact_pressed() -> bool:
+	if Input.is_action_just_pressed("interact"):
+		return true
+	for t in key_taps:
+		if clock >= t and clock - get_physics_process_delta_time() < t:
+			return true
+	return false
 
 
 func make_current() -> void:
@@ -148,6 +193,11 @@ func _physics_process(dt: float) -> void:
 	if Input.is_physical_key_pressed(KEY_D):
 		input.x += 1.0
 	clock += dt
+	# Offers (doors, ladders) run after 47 in the tree and set it again while they apply.
+	prompt = ""
+	if held:
+		velocity = Vector3.ZERO
+		return
 	var scripted := autowalk.x >= 0.0 and clock >= autowalk.x and clock < autowalk.x + autowalk.y
 	if scripted:
 		input.y = 1.0
@@ -242,6 +292,7 @@ func _step(running: bool) -> void:
 
 
 func _process(dt: float) -> void:
+	prompt_label.text = prompt
 	step_lag = move_toward(step_lag * exp(-STEP_SMOOTH * dt), 0.0, 0.0005)
 	model.position.y = -step_lag
 	pivot.position.y = lerpf(pivot.position.y + step_lag, CROUCH_EYE_HEIGHT if sneaking else EYE_HEIGHT, 0.1) - step_lag

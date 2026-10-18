@@ -42,6 +42,8 @@ func _ready() -> void:
 	var sound := Soundscape.new()
 	add_child(sound)
 	_spawn_player()
+	add_child(Doors.new())
+	add_child(Ladders.new())
 	_camera()
 	if OS.get_environment("HITMAN_NO_SNOW").is_empty():
 		var blizzard := Blizzard.new()

@@ -37,8 +37,10 @@ fn pos([x, y, z]: [f32; 3]) -> Vec3 {
 const F: Mat4 = Mat4::from_cols_array(&[1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0]);
 
 /// Clips that play in place (the game moves the character).
+/// Clips whose `GROUND` translation is dropped: loops the game moves through the world itself,
+/// and `Climb_Ladder` (the ladder code lifts 47 at the clip's own 0.5 m per 23-frame stroke).
 fn in_place(name: &str) -> bool {
-    ["Walk", "Run", "Sneak", "Crouch", "Stand", "Drag", "Idle", "Ambient", "UB_"].iter().any(|k| name.starts_with(k) || name.contains("_Loop"))
+    ["Walk", "Run", "Sneak", "Crouch", "Stand", "Drag", "Idle", "Ambient", "UB_", "Climb_Ladder"].iter().any(|k| name.starts_with(k) || name.contains("_Loop"))
 }
 
 pub fn export(level: &Level, _world: &crate::World, out: &Path) -> Result<()> {

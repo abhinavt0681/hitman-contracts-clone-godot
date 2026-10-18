@@ -52,6 +52,7 @@ fn main() -> Result<()> {
         std::fs::create_dir_all(out.join("level"))?;
         export_level(&level, &world, &out.join(format!("level/{scene}.glb")))?;
         export_markers(&level, &world, &out.join(format!("level/{scene}_markers.json")))?;
+        export_ladders(&level, &world, &out.join(format!("level/{scene}_ladders.json")))?;
     }
     if what("--characters") {
         std::fs::create_dir_all(out.join("characters"))?;
@@ -98,6 +99,8 @@ fn mat3_mul(a: [[f32; 3]; 3], b: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
 pub struct World {
     pub positions: Vec<[f32; 3]>,
     pub rotations: Vec<[[f32; 3]; 3]>,
+    /// Each entity's parent in the scene tree.
+    pub parents: Vec<Option<usize>>,
 }
 
 impl World {
@@ -111,10 +114,11 @@ fn compose_world(level: &Level) -> World {
         pos: [f32; 3],
         rot: [[f32; 3]; 3],
         physical: bool,
+        index: usize,
     }
     let mut stack: Vec<Frame> = Vec::new();
-    let (mut positions, mut rotations) = (Vec::new(), Vec::new());
-    for e in &level.entities {
+    let (mut positions, mut rotations, mut parents) = (Vec::new(), Vec::new(), Vec::new());
+    for (index, e) in level.entities.iter().enumerate() {
         for _ in 0..(e.tree_bits >> 1) {
             stack.pop();
         }
@@ -131,13 +135,33 @@ fn compose_world(level: &Level) -> World {
             Some(p) if child_of_physical => mat3_mul(e.rotation, p.rot),
             _ => e.rotation,
         };
+        parents.push(stack.last().map(|f| f.index));
         if e.tree_bits & 1 != 0 {
-            stack.push(Frame { pos, rot, physical });
+            stack.push(Frame { pos, rot, physical, index });
         }
         positions.push(pos);
         rotations.push(rot);
     }
-    World { positions, rotations }
+    World { positions, rotations, parents }
+}
+
+/// A door leaf: what swings. The level has no door class; doors are ordinary geometry named
+/// `Door_…` (also `FenceDoor`, `Barracks_Dooor`), and double doors are `DDoor…` groups whose
+/// leaves are named `D0…`/`D1…`/`D2…` (as the Bevy project's `view.rs` found).
+/// Returns the door's name (the group's, for double doors).
+fn door_of(level: &Level, world: &World, i: usize) -> Option<String> {
+    let e = &level.entities[i];
+    if e.primitive == 0 {
+        return None;
+    }
+    if let Some(p) = world.parents[i] {
+        let parent = &level.entities[p].name;
+        if parent.starts_with("DDoor") && ["D0", "D1", "D2"].iter().any(|d| e.name.starts_with(d)) {
+            return Some(format!("{parent}@{p}"));
+        }
+    }
+    let n = e.name.as_str();
+    (n.starts_with("Door") || n.starts_with("FenceDoo") || n.starts_with("Barracks_Doo")).then(|| format!("{n}@{i}"))
 }
 
 fn is_map_geometry(level: &Level, e: &glacier_export::glacier::gms::Entity, cache: &mut HashMap<u32, bool>) -> bool {
@@ -292,6 +316,8 @@ fn export_level(level: &Level, world: &World, path: &std::path::Path) -> Result<
     }
     let mut cache: HashMap<(u32, bool, bool), Cached> = HashMap::new();
     let mut collision: Vec<[Vec3; 3]> = Vec::new();
+    // Door leaves: kept out of the static collision (Godot swings them as bodies of their own).
+    let mut doors: Vec<serde_json::Value> = Vec::new();
     let level_root = gltf.node(json!({ "name": "Level" }));
     let mut children = Vec::new();
     let (mut placed, mut prims) = (0usize, 0usize);
@@ -305,7 +331,9 @@ fn export_level(level: &Level, world: &World, path: &std::path::Path) -> Result<
         }
         let coli = e.name.contains("Coli");
         let effect = ["Sky", "Blowing", "Fog", "Glitter", "GlowVol", "GlowRain", "Snow_", "SnowBlowing"].iter().any(|k| e.name.contains(k));
-        let non_solid = effect || ["Cable", "Decal", "Light", "Lamp", "Wire", "Icicle", "Shadow", "Glow", "Corona"].iter().any(|k| e.name.contains(k));
+        // (Lamps and lights are solid: their posts and housings block; their glow cards are
+        // blended, and blended parts never collide.)
+        let non_solid = effect || ["Cable", "Decal", "Wire", "Icicle", "Shadow", "Glow", "Corona"].iter().any(|k| e.name.contains(k));
         let cached = match cache.entry((e.primitive, coli, non_solid)) {
             std::collections::hash_map::Entry::Occupied(o) => o.into_mut(),
             std::collections::hash_map::Entry::Vacant(v) => {
@@ -341,7 +369,11 @@ fn export_level(level: &Level, world: &World, path: &std::path::Path) -> Result<
             }
         };
         let m = world.transform(index);
-        if e.type_id == STATIC_GEOM_TYPE {
+        let door = door_of(level, world, index);
+        if door.is_some() {
+            doors.push(json!({ "door": door, "node": format!("{}__leaf{index}", e.name), "index": index }));
+        }
+        if e.type_id == STATIC_GEOM_TYPE && door.is_none() {
             for t in &cached.solid {
                 collision.push(t.map(|v| m.transform_point3(v)));
             }
@@ -360,7 +392,8 @@ fn export_level(level: &Level, world: &World, path: &std::path::Path) -> Result<
         }
         let Some(mesh) = cached.mesh else { continue };
         let lift = lifts.get(&index).copied().unwrap_or(0.0);
-        let node = gltf.node(json!({ "name": e.name, "mesh": mesh, "matrix": mat4_cols(Mat4::from_translation(Vec3::Y * lift) * m) }));
+        let node_name = if door.is_some() { format!("{}__leaf{index}", e.name) } else { e.name.clone() };
+        let node = gltf.node(json!({ "name": node_name, "mesh": mesh, "matrix": mat4_cols(Mat4::from_translation(Vec3::Y * lift) * m) }));
         children.push(node);
         placed += 1;
         prims += gltf.meshes[mesh]["primitives"].as_array().map_or(0, |p| p.len());
@@ -377,6 +410,8 @@ fn export_level(level: &Level, world: &World, path: &std::path::Path) -> Result<
         let mesh = gltf.mesh(&format!("Collision_{k}"), &[Primitive { positions: &positions, normals: &normals, uvs: &uvs, colors: None, joints: None, weights: None, indices: &indices, material: None }]);
         col_children.push(gltf.node(json!({ "name": format!("Collision_{k}-colonly"), "mesh": mesh })));
     }
+    std::fs::write(path.with_file_name(format!("{}_doors.json", path.file_stem().unwrap_or_default().to_string_lossy())), serde_json::to_vec_pretty(&doors)?)?;
+    println!("doors: {} leaves", doors.len());
     export_heights(&collision, &path.with_file_name(format!("{}_heights.bin", path.file_stem().unwrap_or_default().to_string_lossy())))?;
     gltf.nodes[collision_root]["children"] = json!(col_children);
     gltf.nodes[level_root]["children"] = json!(children);
@@ -600,6 +635,83 @@ fn ray_triangle(o: Vec3, d: Vec3, t: &[Vec3; 3]) -> Option<f32> {
         return None;
     }
     Some(e2.dot(q) * inv)
+}
+
+/// Engine class of a ladder guide: an invisible box spanning a climbable ladder
+/// (`LadderSub_T1Guide`, `MountainLadder_T1Guide_01`, …).
+const LADDER_GUIDE_CLASS: u32 = 0x4000022;
+
+/// The level's ladders, for `ladders.gd`, as the Bevy project's `view.rs` found them: each
+/// guide's box (guides carry no geometry, only their model's bounding box), and from a ladder
+/// mesh standing in it, the rungs' centre line (mean of the vertices 20–40% and 60–80% up) and
+/// the horizontal direction the rungs run along (the main axis of the middle's vertices).
+/// Ladders needn't be axis-aligned: the submarine's is turned about 30°.
+fn export_ladders(level: &Level, world: &World, path: &std::path::Path) -> Result<()> {
+    let corners = |i: usize, a: [f32; 3], b: [f32; 3]| {
+        let m = world.transform(i);
+        (0..8)
+            .map(|k| [if k & 1 == 0 { a[0] } else { b[0] }, if k & 2 == 0 { a[1] } else { b[1] }, if k & 4 == 0 { a[2] } else { b[2] }])
+            .map(|c| m.transform_point3(Vec3::from(swap_xz(c))))
+            .fold((Vec3::MAX, Vec3::MIN), |(lo, hi), p| (lo.min(p), hi.max(p)))
+    };
+    struct Rail {
+        low: Vec3,
+        high: Vec3,
+        across: Vec3,
+    }
+    let mut rails = Vec::new();
+    for (i, e) in level.entities.iter().enumerate() {
+        if !e.name.contains("Ladder") || e.type_id != STATIC_GEOM_TYPE || e.primitive == 0 {
+            continue;
+        }
+        let Ok(model) = level.prm.model(e.primitive) else { continue };
+        let m = world.transform(i);
+        let points: Vec<Vec3> = model.submeshes.iter().filter(|s| s.in_lod0() && !s.is_proxy()).flat_map(|s| s.vertices.iter()).map(|v| m.transform_point3(Vec3::from(swap_xz(v.pos)))).collect();
+        let (lo, hi) = points.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p.y), hi.max(p.y)));
+        if points.is_empty() || hi - lo < 1.0 {
+            continue;
+        }
+        let band = |from: f32, to: f32| -> Vec<Vec3> { points.iter().copied().filter(|p| p.y >= lo + from * (hi - lo) && p.y <= lo + to * (hi - lo)).collect() };
+        let mean = |ps: &[Vec3]| ps.iter().copied().sum::<Vec3>() / ps.len().max(1) as f32;
+        let (low_band, high_band, mid) = (band(0.2, 0.4), band(0.6, 0.8), band(0.2, 0.8));
+        if low_band.is_empty() || high_band.is_empty() {
+            continue;
+        }
+        let c = mean(&mid);
+        let (mut xx, mut xz, mut zz) = (0.0, 0.0, 0.0);
+        for p in &mid {
+            let (dx, dz) = (p.x - c.x, p.z - c.z);
+            xx += dx * dx;
+            xz += dx * dz;
+            zz += dz * dz;
+        }
+        let angle = 0.5 * (2.0 * xz).atan2(xx - zz);
+        rails.push(Rail { low: mean(&low_band), high: mean(&high_band), across: Vec3::new(angle.cos(), 0.0, angle.sin()) });
+    }
+    let mut out = Vec::new();
+    for (i, e) in level.entities.iter().enumerate() {
+        if e.type_id != LADDER_GUIDE_CLASS || e.primitive == 0 {
+            continue;
+        }
+        let Ok(model) = level.prm.model(e.primitive) else { continue };
+        let (min, max) = corners(i, model.bbox_min, model.bbox_max);
+        if min.x > max.x {
+            continue;
+        }
+        let rail = rails.iter().find(|r| {
+            let mid = (r.low + r.high) * 0.5;
+            mid.x > min.x - 0.6 && mid.x < max.x + 0.6 && mid.z > min.z - 0.6 && mid.z < max.z + 0.6
+        });
+        out.push(json!({
+            "name": e.name,
+            "min": min.to_array(),
+            "max": max.to_array(),
+            "rail": rail.map(|r| json!({ "low": r.low.to_array(), "high": r.high.to_array(), "across": r.across.to_array() })),
+        }));
+    }
+    println!("ladders: {} guides, {} with a ladder mesh", out.len(), out.iter().filter(|g| !g["rail"].is_null()).count());
+    std::fs::write(path, serde_json::to_vec_pretty(&out)?)?;
+    Ok(())
 }
 
 /// Every entity's name, class and world transform (Bevy/Godot axes, metres).
