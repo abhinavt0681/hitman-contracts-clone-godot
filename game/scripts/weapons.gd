@@ -23,6 +23,10 @@ const SILENCED_ALARM := 5.0
 const SILENCED_HEARD := 15.0
 const AIM_FOV := 32.0
 const AIM_DISTANCE := 2.2
+## The gun's turn about Z in the hand (degrees), tuned live in the editor: aimed, and held
+## lowered at his side.
+const GRIP_AIMED := -2.0
+const GRIP_LOWERED := 55.0
 ## Where in `UB_Aim_Gun`'s sweep of directions (left, ahead, right, up…, down) the gun points
 ## straight ahead: 1.8 s, found by sampling the sweep;
 ## `HITMAN_AIM_T` overrides it (tuning).
@@ -63,8 +67,7 @@ func _ready() -> void:
 	gun = (load("res://imported/characters/weapon_silverballer.glb") as PackedScene).instantiate()
 	gun.name = "Silverballer"
 	hand.add_child(gun)
-	# A 2° turn about the barrel, tuned live in the editor.
-	gun.transform = Transform3D(Basis(Vector3.BACK, deg_to_rad(-2.0)), Vector3.ZERO)
+	gun.transform = Transform3D(Basis(Vector3.BACK, deg_to_rad(GRIP_AIMED)), Vector3.ZERO)
 	gun.visible = false
 	hold = AimPose.new()
 	skel.add_child(hold)
@@ -142,6 +145,7 @@ func _process(dt: float) -> void:
 	hold.influence = move_toward(hold.influence, 1.0 if drawn and reloading <= 0.0 else 0.0, dt * 6.0)
 	hold.pitch = -player.pitch * 0.8 if aiming else 0.0
 	player.aiming = aiming
+	gun.rotation.z = lerp_angle(gun.rotation.z, deg_to_rad(GRIP_AIMED if aiming else GRIP_LOWERED), minf(dt * 12.0, 1.0))
 	player.camera.fov = lerpf(player.camera.fov, AIM_FOV if aiming else 45.0, minf(dt * 10.0, 1.0))
 	player.arm.spring_length = lerpf(player.arm.spring_length, AIM_DISTANCE if aiming else Player.CAMERA_DISTANCE, minf(dt * 10.0, 1.0))
 	crosshair.visible = aiming
