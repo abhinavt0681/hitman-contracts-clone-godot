@@ -58,7 +58,65 @@ pub fn export(level: &Level, _world: &crate::World, out: &Path) -> Result<()> {
     // The template's own orientation, turned to face −Z, with the mirror folded in.
     let root = crate::instance_transform(template.rotation, [0.0; 3]) * Mat4::from_rotation_y(std::f32::consts::PI) * F;
     write(level, &model, &clips, root, "Hitman", &out.join("hitman.glb"))?;
+    tie(level, out)?;
     actors(level, out)?;
+    Ok(())
+}
+
+/// How far in front of his centre line the knot sits beyond the mesh's own offset (cm), and how
+/// far the hanging tie leans forward over his chest (per unit down): the Bevy project's values.
+const KNOT_OUT: f32 = 2.0;
+const TIE_LEAN: f32 = 0.44;
+
+/// 47's tie (`tie.glb`, `tie.json`). The original keeps it out of the suit's mesh: it's its own
+/// object (`Tie`, class 0x2000FF, in the `Hitman2_Tie` group), authored jutting out at 45° from
+/// the knot and simulated (gravity and three collision planes lay it on his shirt). As in the
+/// Bevy project, it's hung at rest instead: the mesh is written with its knot (the mean of its
+/// top vertices) at the origin, hanging straight down (towards the mean of its bottom
+/// vertices), its 6 cm width along X; `tie.json` says where the knot sits on 47 (height above
+/// his feet and distance in front of his centre line, from the nearest `Hitman2` template's
+/// offset) and how far it leans forward. `player.gd` hangs it from his chest bone.
+fn tie(level: &Level, out: &Path) -> Result<()> {
+    let Some(e) = level.entities.iter().find(|e| e.name == "Tie" && e.type_id == 0x2000ff) else {
+        println!("tie: none in the level");
+        return Ok(());
+    };
+    let d = |a: [f32; 3]| (a[0] - e.position[0]).powi(2) + (a[1] - e.position[1]).powi(2) + (a[2] - e.position[2]).powi(2);
+    let template = level.entities.iter().filter(|t| t.name == "Hitman2" && t.position != [0.0; 3]).min_by(|a, b| d(a.position).total_cmp(&d(b.position))).context("no Hitman2 near the tie")?;
+    let sm = level.prm.model(e.primitive)?.submeshes.into_iter().find(|s| s.in_lod0() && !s.is_proxy()).context("tie has no mesh")?;
+    let local = |p: [f32; 3]| Vec3::from(crate::swap_xz(p));
+    let (top, bottom) = sm.vertices.iter().fold((f32::MIN, f32::MAX), |(t, b), v| (t.max(v.pos[1]), b.min(v.pos[1])));
+    let mean_of = |sel: &dyn Fn(f32) -> bool| {
+        let vs: Vec<Vec3> = sm.vertices.iter().filter(|v| sel(v.pos[1])).map(|v| local(v.pos)).collect();
+        vs.iter().copied().sum::<Vec3>() / vs.len().max(1) as f32
+    };
+    let (knot, tip) = (mean_of(&|y| y > top - 2.0), mean_of(&|y| y < bottom + 2.0));
+    let frame = |length: Vec3, width: Vec3| {
+        let a = length.normalize();
+        let b = (width - a * width.dot(a)).normalize();
+        glam::Mat3::from_cols(a, b, a.cross(b))
+    };
+    let r = frame(Vec3::NEG_Y, Vec3::X) * frame(tip - knot, Vec3::Z).transpose();
+    let positions: Vec<[f32; 3]> = sm.vertices.iter().map(|v| (r * (local(v.pos) - knot) * 0.01).to_array()).collect();
+    let normals: Vec<[f32; 3]> = sm.vertices.iter().map(|v| (r * local(v.normal)).normalize_or_zero().to_array()).collect();
+    let uvs: Vec<[f32; 2]> = sm.vertices.iter().map(|v| v.uv).collect();
+    let indices: Vec<u16> = sm.triangles.iter().flatten().copied().collect();
+    let mut gltf = Gltf::default();
+    let mut materials = Materials::new();
+    let m = materials.get(&mut gltf, level, sm.texture, crate::blend_mode(sm.blended, sm.render_state));
+    let mesh = gltf.mesh("Tie", &[Primitive { positions: &positions, normals: &normals, uvs: &uvs, colors: None, joints: None, weights: None, indices: &indices, material: Some(m) }]);
+    let node = gltf.node(json!({ "name": "Tie", "mesh": mesh }));
+    gltf.scene_roots = vec![node];
+    gltf.write(&out.join("tie.glb"))?;
+    let offset_y = e.position[1] - template.position[1];
+    let meta = json!({
+        "knot_height": (offset_y + knot.y) * 0.01,
+        "knot_front": (knot.with_y(0.0).length() + KNOT_OUT) * 0.01,
+        "lean": TIE_LEAN,
+        "length": (tip - knot).length() * 0.01,
+    });
+    std::fs::write(out.join("tie.json"), serde_json::to_vec_pretty(&meta)?)?;
+    println!("tie: {}", meta);
     Ok(())
 }
 

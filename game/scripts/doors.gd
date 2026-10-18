@@ -245,7 +245,8 @@ func _hang_in_cavity(door: Door) -> bool:
 
 ## Distance to the level's static collision along a ray, or −1.
 func _ray(space: PhysicsDirectSpaceState3D, from: Vector3, dir: Vector3, length: float) -> float:
-	var q := PhysicsRayQueryParameters3D.create(from, from + dir * length, 1)
+	var me := get_parent().get_node_or_null("Player") as CollisionObject3D
+	var q := PhysicsRayQueryParameters3D.create(from, from + dir * length, 1, [me.get_rid()] if me else [])
 	var hit := space.intersect_ray(q)
 	return -1.0 if hit.is_empty() else from.distance_to(hit["position"])
 

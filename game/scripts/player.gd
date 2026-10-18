@@ -39,6 +39,14 @@ const STEP_VOLUME := {"walk": 0.11, "run": 0.17, "sneak": 0.03}
 const SNOW_GAIN := 0.25
 
 const MODEL := "res://imported/characters/hitman.glb"
+const TIE := "res://imported/characters/tie.glb"
+const TIE_META := "res://imported/characters/tie.json"
+## The tie's swing (the Bevy project's `tie.rs`): spring stiffness and damping, how far his
+## acceleration tips it (rad per m/s²), and the most it swings (rad).
+const TIE_STIFFNESS := 60.0
+const TIE_DAMPING := 7.0
+const TIE_TIP := 0.05
+const TIE_MAX := 0.6
 const CLIPS := "res://imported/characters/hitman.json"
 
 var yaw := 0.0
@@ -67,6 +75,13 @@ var held := false
 var prompt := ""
 var prompt_label: Label
 var key_taps: Array[float] = []
+## The tie: its pivot at the knot (on his chest bone), its rest pose there, and its swing.
+var tie: Node3D
+var tie_rest: Basis
+var tie_angle := Vector2.ZERO
+var tie_rate := Vector2.ZERO
+var tie_last_pos := Vector3.ZERO
+var tie_last_vel := Vector3.ZERO
 var capsule_radius := 0.3
 
 
@@ -92,6 +107,7 @@ func _ready() -> void:
 	anim.play("Stand_Do_Nothing")
 	skeleton = model.find_child("Skeleton3D", true, false) as Skeleton3D
 	feet = [skeleton.find_bone("LEFT_FOOT"), skeleton.find_bone("RIGHT_FOOT")]
+	_hang_tie.call_deferred()
 	for k in 6:
 		steps["snow"].append(load("res://imported/sounds/Step_SnowNew_%02d.wav" % (k + 1)))
 		steps["concrete"].append(load("res://imported/sounds/Step_Concrete_%02d.wav" % (k + 1)))
@@ -131,6 +147,46 @@ func _ready() -> void:
 	arm.add_child(camera)
 
 
+## 47's tie, a separate object in the original (see the exporter's `tie`), hung from his chest
+## bone at the knot, leaning forward over his shirt.
+func _hang_tie() -> void:
+	if not ResourceLoader.exists(TIE):
+		return
+	await get_tree().process_frame
+	var meta: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(TIE_META))
+	var chest := BoneAttachment3D.new()
+	chest.bone_name = "SPINE_1"
+	skeleton.add_child(chest)
+	tie = Node3D.new()
+	chest.add_child(tie)
+	var lean := atan(float(meta["lean"]))
+	tie.global_transform = model.global_transform * Transform3D(Basis(Vector3.RIGHT, lean), Vector3(0.0, meta["knot_height"], -float(meta["knot_front"])))
+	tie_rest = tie.basis
+	tie.add_child((load(TIE) as PackedScene).instantiate())
+	tie_last_pos = global_position
+
+
+## A damped spring tips the tie against his acceleration: it trails when he sets off and swings
+## forward when he stops or turns.
+func _swing_tie(dt: float) -> void:
+	if tie == null or dt <= 0.0:
+		return
+	var vel := (global_position - tie_last_pos) / dt
+	var accel := ((vel - tie_last_vel) / dt).limit_length(30.0)
+	tie_last_pos = global_position
+	tie_last_vel = vel
+	var fwd := -model.global_basis.z
+	fwd.y = 0.0
+	fwd = fwd.normalized()
+	var right := Vector3(-fwd.z, 0.0, fwd.x)
+	var target := Vector2(accel.dot(fwd), accel.dot(right)) * TIE_TIP
+	tie_rate += ((target - tie_angle) * TIE_STIFFNESS - tie_rate * TIE_DAMPING) * dt
+	tie_angle = (tie_angle + tie_rate * dt).clamp(Vector2(-TIE_MAX, -TIE_MAX), Vector2(TIE_MAX, TIE_MAX))
+	var swing := Basis(right, tie_angle.x) * Basis(fwd, -tie_angle.y)
+	var chest := (tie.get_parent() as Node3D).global_basis.orthonormalized()
+	tie.basis = chest.inverse() * swing * chest * tie_rest
+
+
 func _prompt_ui() -> void:
 	var layer := CanvasLayer.new()
 	add_child(layer)
@@ -156,6 +212,18 @@ func interact_pressed() -> bool:
 		if clock >= t and clock - get_physics_process_delta_time() < t:
 			return true
 	return false
+
+
+## W (+1) or S (−1) held, for climbing (a scripted `HITMAN_AUTOWALK` counts as W).
+func climb_input() -> float:
+	var v := 0.0
+	if Input.is_physical_key_pressed(KEY_W):
+		v += 1.0
+	if Input.is_physical_key_pressed(KEY_S):
+		v -= 1.0
+	if autowalk.x >= 0.0 and clock >= autowalk.x and clock < autowalk.x + autowalk.y:
+		v = 1.0
+	return v
 
 
 func make_current() -> void:
@@ -293,6 +361,7 @@ func _step(running: bool) -> void:
 
 func _process(dt: float) -> void:
 	prompt_label.text = prompt
+	_swing_tie(dt)
 	step_lag = move_toward(step_lag * exp(-STEP_SMOOTH * dt), 0.0, 0.0005)
 	model.position.y = -step_lag
 	pivot.position.y = lerpf(pivot.position.y + step_lag, CROUCH_EYE_HEIGHT if sneaking else EYE_HEIGHT, 0.1) - step_lag

@@ -9,6 +9,9 @@ extends Node3D
 ## standing in it. The guide doesn't say which side is climbed, so that comes from the level's
 ## collision: the side with ground at the bottom faces the side with a landing at the top.
 ##
+## E at either end gets on; W climbs up and S down (let go and he hangs there); climbing past
+## the top carries him over onto the landing, past the foot steps him off.
+##
 ## The climb plays 47's original `Climb_Ladder`: frames 0–23 are the climbing stroke (frame 23
 ## matches frame 0, the root 50 cm higher), frames 23–57 the climb over the top (another
 ## 150.65 cm). Strokes loop on the way; the climb-over plays once at the top (backwards when
@@ -26,8 +29,8 @@ const OVER_SECONDS := 34.0 / 30.0
 ## How far from the ladder 47 hangs, and where he stands at either end (m).
 const HANG := 0.32
 const STAND := 0.6
-## Within this of a ladder's end (m), E climbs it.
-const REACH := 0.9
+## Within this of a ladder's end (m, horizontally; 1 m vertically), E climbs it.
+const REACH := 1.2
 ## How far a guide's box sits above the floors it joins: measured on the submarine ladder
 ## (guide −2.6…0.9 m, ice −3.7, deck −0.2) and the tunnel shaft (−8.0…1.25, floors −9.1, 0.15).
 const GUIDE_LIFT := 1.1
@@ -66,6 +69,7 @@ var stage := Stage.ON
 var from := Vector3.ZERO
 var t := 0.0
 var clip_time := 0.0
+var exclude: Array[RID] = []
 
 
 func _ready() -> void:
@@ -73,6 +77,10 @@ func _ready() -> void:
 	await get_tree().physics_frame
 	await get_tree().physics_frame
 	var space := get_world_3d().direct_space_state
+	# The level only: 47 standing at a ladder must not count as a wall or a floor.
+	var me := get_parent().get_node_or_null("Player") as CollisionObject3D
+	if me:
+		exclude.append(me.get_rid())
 	for g: Dictionary in JSON.parse_string(FileAccess.get_file_as_string(LADDERS)):
 		var lo := _v(g["min"])
 		var hi := _v(g["max"])
@@ -106,7 +114,7 @@ func _ready() -> void:
 			# The climbing side must be open at chest height.
 			var chest := centre - d * 0.1
 			chest.y = bottom + 1.3
-			if not space.intersect_ray(PhysicsRayQueryParameters3D.create(chest, chest - d * (STAND + 0.2))).is_empty():
+			if not space.intersect_ray(PhysicsRayQueryParameters3D.create(chest, chest - d * (STAND + 0.2), 1, exclude)).is_empty():
 				continue
 			var skew := 1.0 - maxf(absf(d.x), absf(d.z))
 			var score: float = absf(top - tip) + absf(bottom - bot) + 0.05 * skew
@@ -132,7 +140,7 @@ func _v(a: Array) -> Vector3:
 
 ## Floor height near `y` under a point, if any.
 func _floor_near(space: PhysicsDirectSpaceState3D, p: Vector3, y: float) -> Variant:
-	var hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(Vector3(p.x, y + 1.2, p.z), Vector3(p.x, y - 1.2, p.z)))
+	var hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(Vector3(p.x, y + 1.2, p.z), Vector3(p.x, y - 1.2, p.z), 1, exclude))
 	if hit.is_empty() or (hit["normal"] as Vector3).y < 0.6:
 		return null
 	var f: float = (hit["position"] as Vector3).y
@@ -177,12 +185,14 @@ func _offer() -> void:
 
 
 func _near(me: Vector3, p: Vector3) -> bool:
-	return Vector2(me.x - p.x, me.z - p.z).length() < REACH and absf(me.y - p.y) < 0.8
+	return Vector2(me.x - p.x, me.z - p.z).length() < REACH and absf(me.y - p.y) < 1.0
 
 
+## Holds `Climb_Ladder` at `frame`. No cross-fade: Godot advances a blend with the playback
+## speed, and at speed 0 (posing by hand) it never got past the standing pose.
 func _pose(frame: float) -> void:
 	if player.anim.current_animation != CLIP:
-		player.anim.play(CLIP, 0.15)
+		player.anim.play(CLIP, 0.0)
 	player.anim.speed_scale = 0.0
 	player.anim.seek(frame / FPS, true)
 
@@ -204,15 +214,18 @@ func _climb(dt: float) -> void:
 			if k >= 1.0:
 				_next(Stage.CLIMB if up else Stage.OVER)
 		Stage.CLIMB:
-			var rate := 1.0 if up else -1.0
+			# W climbs up, S down; let go and he hangs where he is.
+			var rate := player.climb_input()
 			clip_time = fposmod(clip_time + rate * dt * FPS, STROKE.y - STROKE.x)
 			_pose(STROKE.x + clip_time)
-			var y := player.global_position.y + rate * CLIMB_SPEED * dt
-			var done := y >= over_low if up else y <= l.bottom
-			var end := over_low if up else l.bottom
-			player.global_position = l.hang(end if done else y)
-			if done:
-				_next(Stage.OVER if up else Stage.OFF)
+			var y := clampf(player.global_position.y + rate * CLIMB_SPEED * dt, l.bottom, over_low)
+			player.global_position = l.hang(y)
+			if rate > 0.0 and y >= over_low:
+				up = true
+				_next(Stage.OVER)
+			elif rate < 0.0 and y <= l.bottom:
+				up = false
+				_next(Stage.OFF)
 		Stage.OVER:
 			var k := minf(t / OVER_SECONDS, 1.0)
 			_pose(lerpf(OVER.x, OVER.y, k if up else 1.0 - k))

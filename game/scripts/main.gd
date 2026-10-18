@@ -44,6 +44,7 @@ func _ready() -> void:
 	_spawn_player()
 	add_child(Doors.new())
 	add_child(Ladders.new())
+	add_child(Steam.new())
 	_camera()
 	if OS.get_environment("HITMAN_NO_SNOW").is_empty():
 		var blizzard := Blizzard.new()
@@ -108,6 +109,10 @@ func _additive(root: Node) -> void:
 		var sprite := _is_glow_sprite(mi)
 		for s in mi.mesh.get_surface_count():
 			var mat := mi.mesh.surface_get_material(s) as StandardMaterial3D
+			if mat and mat.resource_name.ends_with("_cutout"):
+				# Cutouts (fences, grilles): smooth edges from MSAA instead of stair-steps.
+				mat.alpha_antialiasing_mode = BaseMaterial3D.ALPHA_ANTIALIASING_ALPHA_TO_COVERAGE
+				continue
 			if mat == null or not mat.resource_name.ends_with("_add"):
 				continue
 			var key := [mat, sprite]
@@ -167,7 +172,7 @@ func _lamps() -> void:
 			spots[Vector3i(Vector3(m["pos"][0], m["pos"][1], m["pos"][2]).round())] = true
 	var counts := {"spot": 0, "omni": 0}
 	for m: Dictionary in markers:
-		if not LIGHT_CLASSES.has(m["type"]):
+		if not LIGHT_CLASSES.has(m["type"]) or m.get("template", false):
 			continue
 		var name: String = m["name"]
 		if name.begins_with("Omni_Explosion") or name.begins_with("Omni_Reticle"):

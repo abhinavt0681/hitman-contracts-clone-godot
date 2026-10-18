@@ -145,6 +145,36 @@ fn compose_world(level: &Level) -> World {
     World { positions, rotations, parents }
 }
 
+/// Groups the engine keeps out of the world until something swaps them in, all stored at the
+/// origin (behind the AN-124, where they showed as a lit backdrop, antennas and 47's suitcases):
+/// - shared content every level includes: menu and briefing sets, the pack-and-unpack scenes,
+///   HUD counters (`AllLevels/MainSceneIncludes.zip`); item templates (`AllLevels/Equipment.zip`);
+/// - the broken and switched-off variants of lamps, monitors and searchlights, swapped in when
+///   one is shot out (`Effects/C2_ShatterObjects.zip`);
+/// - disguise bundles (`ClothBundleControl`), the burnt-out jeep for after an explosion
+///   (`Car_Jeep_BurnOut_01`), and debris (`CloneGroup`).
+const TEMPLATE_GROUPS: [&str; 6] = [
+    "AllLevels/MainSceneIncludes.zip",
+    "AllLevels/Equipment.zip",
+    "Effects/C2_ShatterObjects.zip",
+    "ClothBundleControl",
+    "Car_Jeep_BurnOut_01",
+    "CloneGroup",
+];
+
+/// Whether an entity belongs to a template group (`TEMPLATE_GROUPS`).
+fn is_template(level: &Level, world: &World, mut i: usize) -> bool {
+    loop {
+        if TEMPLATE_GROUPS.contains(&level.entities[i].name.as_str()) {
+            return true;
+        }
+        match world.parents[i] {
+            Some(p) => i = p,
+            None => return false,
+        }
+    }
+}
+
 /// A door leaf: what swings. The level has no door class; doors are ordinary geometry named
 /// `Door_…` (also `FenceDoor`, `Barracks_Dooor`), and double doors are `DDoor…` groups whose
 /// leaves are named `D0…`/`D1…`/`D2…` (as the Bevy project's `view.rs` found).
@@ -283,7 +313,19 @@ impl Materials {
                     let tex = gltf.texture(&t.name, &png);
                     mat["pbrMetallicRoughness"]["baseColorTexture"] = json!({ "index": tex });
                 }
-                if blended {
+                // A "blended" texture whose alpha is nearly all fully opaque or fully clear is a
+                // cutout (chain-link fences, grilles, branches): alpha-tested, it writes depth and
+                // sorts like any solid, so glass and glows in front of or behind it stay right.
+                // (Blended, a fence's huge mesh drew over the glass of a lamp in front of it.)
+                let soft = t.rgba.chunks_exact(4).filter(|p| p[3] > 20 && p[3] < 235).count();
+                let clear = t.rgba.chunks_exact(4).filter(|p| p[3] <= 20).count();
+                let pixels = (t.rgba.len() / 4) as f32;
+                let cutout = mode == 1 && (soft as f32) < 0.05 * pixels && (clear as f32) > 0.1 * pixels;
+                if cutout {
+                    mat["name"] = json!(format!("{}_cutout", t.name));
+                    mat["alphaMode"] = json!("MASK");
+                    mat["alphaCutoff"] = json!(0.5);
+                } else if blended {
                     mat["alphaMode"] = json!("BLEND");
                 } else if t.rgba.chunks_exact(4).any(|p| p[3] < 128) {
                     mat["alphaMode"] = json!("MASK");
@@ -326,7 +368,7 @@ fn export_level(level: &Level, world: &World, path: &std::path::Path) -> Result<
         if e.primitive == 0 || !level.prm.is_record(e.primitive) || is_map_geometry(level, e, &mut map_textures) {
             continue;
         }
-        if HELPER_TYPES.contains(&e.type_id) || e.flags & FLAG_FX_TEMPLATE != 0 {
+        if HELPER_TYPES.contains(&e.type_id) || e.flags & FLAG_FX_TEMPLATE != 0 || is_template(level, world, index) {
             continue;
         }
         let coli = e.name.contains("Coli");
@@ -723,7 +765,7 @@ fn export_markers(level: &Level, world: &World, path: &std::path::Path) -> Resul
         .map(|(i, e)| {
             let (_, rot, pos) = world.transform(i).to_scale_rotation_translation();
             // `local`: the entity's own position, uncomposed (templates and actors are placed by it).
-            json!({ "i": i, "name": e.name, "type": format!("{:#x}", e.type_id), "pos": pos.to_array(), "rot": rot.to_array(), "local": glacier_to_bevy(e.position).to_array() })
+            json!({ "i": i, "name": e.name, "type": format!("{:#x}", e.type_id), "pos": pos.to_array(), "rot": rot.to_array(), "local": glacier_to_bevy(e.position).to_array(), "parent": world.parents[i], "template": is_template(level, world, i) })
         })
         .collect();
     std::fs::write(path, serde_json::to_vec(&items)?)?;
